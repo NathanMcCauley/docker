@@ -211,7 +211,9 @@ func (r *NotaryRepository) Initialize(uCryptoService *cryptoservice.UnlockedCryp
 	err = r.tufRepo.InitRoot(false)
 	if err != nil {
 		logrus.Debug("Error on InitRoot: ", err.Error())
-		if _, ok := err.(tuferrors.ErrInsufficientSignatures); !ok {
+		switch err.(type) {
+		case tuferrors.ErrInsufficientSignatures, trustmanager.ErrPasswordInvalid:
+		default:
 			return err
 		}
 	}
@@ -226,12 +228,7 @@ func (r *NotaryRepository) Initialize(uCryptoService *cryptoservice.UnlockedCryp
 		return err
 	}
 
-	if err := r.saveMetadata(uCryptoService.CryptoService); err != nil {
-		return err
-	}
-
-	// Creates an empty snapshot
-	return r.snapshot()
+	return r.saveMetadata(uCryptoService.CryptoService)
 }
 
 // AddTarget adds a new target to the repository, forcing a timestamps check from TUF
@@ -258,7 +255,6 @@ func (r *NotaryRepository) AddTarget(target *Target) error {
 
 // ListTargets lists all targets for the current repository
 func (r *NotaryRepository) ListTargets() ([]*Target, error) {
-
 	c, err := r.bootstrapClient()
 	if err != nil {
 		return nil, err
@@ -308,7 +304,7 @@ func (r *NotaryRepository) Publish() error {
 	// attempt to initialize the repo from the remote store
 	c, err := r.bootstrapClient()
 	if err != nil {
-		if _, ok := err.(*store.ErrMetaNotFound); ok {
+		if _, ok := err.(store.ErrMetaNotFound); ok {
 			// if the remote store return a 404 (translated into ErrMetaNotFound),
 			// the repo hasn't been initialized yet. Attempt to load it from disk.
 			err := r.bootstrapRepo()
@@ -463,34 +459,48 @@ func (r *NotaryRepository) bootstrapRepo() error {
 }
 
 func (r *NotaryRepository) saveMetadata(rootCryptoService signed.CryptoService) error {
+	logrus.Debugf("Saving changes to Trusted Collection.")
 	signedRoot, err := r.tufRepo.SignRoot(data.DefaultExpires("root"), rootCryptoService)
 	if err != nil {
 		return err
 	}
+	rootJSON, err := json.Marshal(signedRoot)
+	if err != nil {
+		return err
+	}
 
-	rootJSON, _ := json.Marshal(signedRoot)
-	return r.fileStore.SetMeta("root", rootJSON)
-}
-
-func (r *NotaryRepository) snapshot() error {
-	logrus.Debugf("Saving changes to Trusted Collection.")
-
+	targetsToSave := make(map[string][]byte)
 	for t := range r.tufRepo.Targets {
 		signedTargets, err := r.tufRepo.SignTargets(t, data.DefaultExpires("targets"), nil)
 		if err != nil {
 			return err
 		}
-		targetsJSON, _ := json.Marshal(signedTargets)
-		parentDir := filepath.Dir(t)
-		os.MkdirAll(parentDir, 0755)
-		r.fileStore.SetMeta(t, targetsJSON)
+		targetsJSON, err := json.Marshal(signedTargets)
+		if err != nil {
+			return err
+		}
+		targetsToSave[t] = targetsJSON
 	}
 
 	signedSnapshot, err := r.tufRepo.SignSnapshot(data.DefaultExpires("snapshot"), nil)
 	if err != nil {
 		return err
 	}
-	snapshotJSON, _ := json.Marshal(signedSnapshot)
+	snapshotJSON, err := json.Marshal(signedSnapshot)
+	if err != nil {
+		return err
+	}
+
+	err = r.fileStore.SetMeta("root", rootJSON)
+	if err != nil {
+		return err
+	}
+
+	for role, blob := range targetsToSave {
+		parentDir := filepath.Dir(role)
+		os.MkdirAll(parentDir, 0755)
+		r.fileStore.SetMeta(role, blob)
+	}
 
 	return r.fileStore.SetMeta("snapshot", snapshotJSON)
 }
@@ -506,7 +516,7 @@ func (r *NotaryRepository) bootstrapClient() (*tufclient.Client, error) {
 	// if remote store couldn't be setup, or we failed to get a root from it
 	// load the root from cache (offline operation)
 	if err != nil {
-		if err, ok := err.(*store.ErrMetaNotFound); ok {
+		if err, ok := err.(store.ErrMetaNotFound); ok {
 			// if the error was MetaNotFound then we successfully contacted
 			// the store and it doesn't know about the repo.
 			return nil, err
@@ -514,7 +524,7 @@ func (r *NotaryRepository) bootstrapClient() (*tufclient.Client, error) {
 		rootJSON, err = r.fileStore.GetMeta("root", maxSize)
 		if err != nil {
 			// if cache didn't return a root, we cannot proceed
-			return nil, &store.ErrMetaNotFound{}
+			return nil, store.ErrMetaNotFound{}
 		}
 	}
 	root := &data.Signed{}
