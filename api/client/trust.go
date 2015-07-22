@@ -183,13 +183,13 @@ func (cli *DockerCli) getPassphraseRetriever() passphrase.Retriever {
 
 	return func(keyName string, alias string, createNew bool, numAttempts int) (string, bool, error) {
 		if alias == "root" && len(rootEnv) >= 8 {
-			return rootEnv, false, nil
+			return rootEnv, numAttempts > 1, nil
 		}
 		if alias == "targets" && len(targetEnv) >= 8 {
-			return targetEnv, false, nil
+			return targetEnv, numAttempts > 1, nil
 		}
 		if alias == "snapshot" && len(snapshotEnv) >= 8 {
-			return snapshotEnv, false, nil
+			return snapshotEnv, numAttempts > 1, nil
 		}
 		return baseRetriever(keyName, alias, createNew, numAttempts)
 	}
