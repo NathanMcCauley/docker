@@ -5352,3 +5352,24 @@ func (s *DockerTrustSuite) TestTrustedBuild(c *check.C) {
 	// Build command does not create untrusted tag
 	//dockerCmd(c, "rmi", repoName)
 }
+
+func (s *DockerTrustSuite) TestTrustedBuildUntrustedTag(c *check.C) {
+	repoName := fmt.Sprintf("%v/dockercli/build-untrusted-tag:latest", privateRegistryURL)
+	dockerFile := fmt.Sprintf(`
+  FROM %s
+  RUN []
+    `, repoName)
+
+	name := "testtrustedbuilduntrustedtag"
+
+	buildCmd := buildImageCmd(name, dockerFile, true)
+	s.trustedCmd(buildCmd)
+	out, _, err := runCommandWithOutput(buildCmd)
+	if err == nil {
+		c.Fatalf("Expected error on trusted build with untrusted tag: %s\n%s", err, out)
+	}
+
+	if !strings.Contains(out, fmt.Sprintf("no trust data available")) {
+		c.Fatalf("Unexpected output on trusted build with untrusted tag:\n%s", out)
+	}
+}
