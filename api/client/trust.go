@@ -304,7 +304,14 @@ func (cli *DockerCli) trustedPull(repoInfo *registry.RepositoryInfo, ref registr
 		if !r.reference.HasDigest() {
 			if err := cli.tagTrusted(repoInfo, registry.DigestReference(r.digest), r.reference); err != nil {
 				return err
-
+			}
+			v := url.Values{}
+			v.Set("force", "1")
+			v.Set("noprune", "1")
+			fmt.Println(ref.String())
+			_, err := cli.call("DELETE", "/images/"+ref.String()+"?"+v.Encode(), nil, nil)
+			if err != nil {
+				return err
 			}
 		}
 	}
